@@ -152,7 +152,6 @@ var server = net.createServer(function(stream) {
           if (items[key] != null) {
             delete items[key];
             nitems--;
-
             emit('DELETED\r\n');
           } else {
             emit('NOT_FOUND\r\n');
