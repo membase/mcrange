@@ -23,15 +23,15 @@ var mc_port = 11299;
 
 // ----------------------------------------------------
 
-function mkItems() {
-  var dict = {};
+function mkItems_ht() {
+  var ht = {};
   var truth = function() { return true; };
 
   return {
-      lookup: function(k) { return dict[k]; },
-      upsert: function(k, v) { dict[k] = v; },
-      remove: function(k) { delete dict[k]; },
-      reset: function() { dict = {}; },
+      lookup: function(k) { return ht[k]; },
+      upsert: function(k, v) { ht[k] = v; },
+      remove: function(k) { delete ht[k]; },
+      reset: function() { ht = {}; },
       range: function(startKey,
                       startInclusion,
                       endKey,
@@ -51,7 +51,7 @@ function mkItems() {
          (function(k) { return k < endKey })) :
         truth;
 
-      for (var k in dict) {
+      for (var k in ht) {
         if (startPredicate(k) && endPredicate(k)) {
           if (visitorFunc(k) == false) {
             break;
@@ -62,7 +62,9 @@ function mkItems() {
   };
 }
 
-var items = mkItems();
+// ----------------------------------------------------
+
+var items = mkItems_ht();
 var nitems = 0;
 
 var stats = {
