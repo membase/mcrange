@@ -35,6 +35,7 @@ var stats = {
 
 var server = net.createServer(function(stream) {
     stream.setEncoding('binary');
+    stream.setNoDelay(true);
 
     stream.on('connect', function() {
         stats.num_conns++;
@@ -45,8 +46,34 @@ var server = net.createServer(function(stream) {
         stats.num_conns--;
       });
 
-    var leftOver = null;
-    var handler = new_cmd;
+    var leftOver = null;    // Any remaining bytes when we haven't
+                            // read a full request yet.
+    var handler  = new_cmd; // Either new_cmd (at the start of a new
+                            // request), or read_more (when more
+                            // mutation value data is still being read).
+    var emitQueue = null;   // Used when stream write is full.
+
+    function emit(data) {
+      if (emitQueue != null) {
+        emitQueue[emitQueue.length] = data;
+      } else {
+        if (stream.write(data, 'binary') == false) {
+          emitQueue = [];
+        }
+      }
+    }
+
+    stream.on('drain', function() {
+        if (emitQueue != null) {
+          while (emitQueue.length > 0) {
+            var data = emitQueue.shift();
+            if (stream.write(data, 'binary') == false) {
+              return;
+            }
+          }
+          emitQueue = null;
+        }
+      });
 
     stream.on('data', function(data) {
         if (leftOver) {
@@ -75,15 +102,14 @@ var server = net.createServer(function(stream) {
             var item = items[parts[i]];
             if (item != null &&
                 item.val != null) {
-              stream.write('VALUE ' +
-                           item.key + ' ' +
-                           item.flg + ' ' +
-                           item.val.length + '\r\n' +
-                           item.val + '\r\n',
-                           'binary');
+              emit('VALUE ' +
+                   item.key + ' ' +
+                   item.flg + ' ' +
+                   item.val.length + '\r\n' +
+                   item.val + '\r\n');
             }
           }
-          stream.write('END\r\n', 'binary');
+          emit('END\r\n');
         } else if (cmd == 'set') {
           var item = { key: parts[1],
                        flg: parts[2],
@@ -109,7 +135,7 @@ var server = net.createServer(function(stream) {
               item.val = d.slice(0, nval);
               items[item.key] = item;
 
-              stream.write('STORED\r\n', 'binary');
+              emit('STORED\r\n');
 
               if (handler == read_more) {
                 handler = new_cmd;
@@ -127,19 +153,23 @@ var server = net.createServer(function(stream) {
             delete items[key];
             nitems--;
 
-            stream.write('DELETED\r\n', 'binary');
+            emit('DELETED\r\n');
           } else {
-            stream.write('NOT_FOUND\r\n', 'binary');
+            emit('NOT_FOUND\r\n');
           }
         } else if (cmd == 'stats') {
-            stream.write('STAT num_conns ' + stats.num_conns + '\r\n', 'binary');
-            stream.write('STAT tot_conns ' + stats.tot_conns + '\r\n', 'binary');
-            stream.write('STAT curr_items ' + nitems + '\r\n', 'binary');
-            stream.write('END\r\n', 'binary');
+            emit('STAT num_conns ' + stats.num_conns + '\r\n');
+            emit('STAT tot_conns ' + stats.tot_conns + '\r\n');
+            emit('STAT curr_items ' + nitems + '\r\n');
+            emit('END\r\n');
+        } else if (cmd == 'flush_all') {
+          items = {};
+          nitems = 0;
+          emit('OK\r\n');
         } else if (cmd == 'quit') {
           stream.end();
         } else {
-          stream.write('CLIENT_ERROR\r\n', 'binary');
+          emit('CLIENT_ERROR\r\n');
         }
       }
     }
