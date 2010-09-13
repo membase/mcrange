@@ -110,7 +110,9 @@ var server = net.createServer(function(stream) {
             }
           }
           emit('END\r\n');
-        } else if (cmd == 'set') {
+        } else if (cmd == 'set' ||
+                   cmd == 'add' ||
+                   cmd == 'replace') {
           var item = { key: parts[1],
                        flg: parts[2],
                        exp: parseInt(parts[3]) };
@@ -128,14 +130,34 @@ var server = net.createServer(function(stream) {
               //
               data = null;
             } else {
-              if (items[item.key] == null) {
-                nitems++;
+              item.val = d.slice(0, nval);
+
+              var prev = items[item.key];
+              var resp = 'STORED\r\n';
+
+              if (cmd == 'set') {
+                if (prev == null) {
+                  nitems++;
+                }
+                items[item.key] = item;
+              } else if (cmd == 'add') {
+                if (prev == null) {
+                  nitems++;
+                  items[item.key] = item;
+                } else {
+                  resp = 'NOT_STORED\r\n';
+                }
+              } else if (cmd == 'replace') {
+                if (prev != null) {
+                  items[item.key] = item;
+                } else {
+                  resp = 'NOT_STORED\r\n';
+                }
+              } else {
+                resp = 'SERVER_ERROR\r\n';
               }
 
-              item.val = d.slice(0, nval);
-              items[item.key] = item;
-
-              emit('STORED\r\n');
+              emit(resp);
 
               if (handler == read_more) {
                 handler = new_cmd;
