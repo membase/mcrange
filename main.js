@@ -23,7 +23,46 @@ var mc_port = 11299;
 
 // ----------------------------------------------------
 
-var items  = {};
+function mkItems() {
+  var dict = {};
+  var truth = function() { return true; };
+
+  return {
+      lookup: function(k) { return dict[k]; },
+      upsert: function(k, v) { dict[k] = v; },
+      remove: function(k) { delete dict[k]; },
+      reset: function() { dict = {}; },
+      range: function(startKey,
+                      startInclusion,
+                      endKey,
+                      endInclusion,
+                      visitorFunc) {
+      var startPredicate =
+        startKey ?
+        (startInclusion ?
+         (function(k) { return k >= startKey }) :
+         (function(k) { return k > startKey })) :
+        truth;
+
+      var endPredicate =
+        endKey ?
+        (endInclusion ?
+         (function(k) { return k <= endKey }) :
+         (function(k) { return k < endKey })) :
+        truth;
+
+      for (var k in dict) {
+        if (startPredicate(k) && endPredicate(k)) {
+          if (visitorFunc(k) == false) {
+            break;
+          }
+        }
+      }
+    }
+  };
+}
+
+var items = mkItems();
 var nitems = 0;
 
 var stats = {
@@ -99,7 +138,7 @@ var server = net.createServer(function(stream) {
         var cmd = parts[0];
         if (cmd == 'get') {
           for (var i = 1; i < parts.length; i++) {
-            var item = items[parts[i]];
+            var item = items.lookup(parts[i]);
             if (item != null &&
                 item.val != null) {
               emit('VALUE ' +
@@ -139,38 +178,38 @@ var server = net.createServer(function(stream) {
             } else {
               item.val = d.slice(0, nval);
 
-              var prev = items[item.key];
+              var prev = items.lookup(item.key);
               var resp = 'STORED\r\n';
 
               if (cmd == 'set') {
                 if (prev == null) {
                   nitems++;
                 }
-                items[item.key] = item;
+                items.upsert(item.key, item);
               } else if (cmd == 'add') {
                 if (prev == null) {
                   nitems++;
-                  items[item.key] = item;
+                  items.upsert(item.key, item);
                 } else {
                   resp = 'NOT_STORED\r\n';
                 }
               } else if (cmd == 'replace') {
                 if (prev != null) {
-                  items[item.key] = item;
+                  items.upsert(item.key, item);
                 } else {
                   resp = 'NOT_STORED\r\n';
                 }
               } else if (cmd == 'append') {
                 if (prev != null) {
                   item.val = prev.val + item.val;
-                  items[item.key] = item;
+                  items.upsert(item.key, item);
                 } else {
                   resp = 'NOT_STORED\r\n';
                 }
               } else if (cmd == 'prepend') {
                 if (prev != null) {
                   item.val = item.val + prev.val;
-                  items[item.key] = item;
+                  items.upsert(item.key, item);
                 } else {
                   resp = 'NOT_STORED\r\n';
                 }
@@ -197,8 +236,8 @@ var server = net.createServer(function(stream) {
 
           var key = parts[1];
 
-          if (items[key] != null) {
-            delete items[key];
+          if (items.lookup(key) != null) {
+            items.remove(key);
             nitems--;
             emit('DELETED\r\n');
           } else {
@@ -213,41 +252,28 @@ var server = net.createServer(function(stream) {
             continue;
           }
 
-          var startInclusion = parts[1];
-          var endInclusion = parts[2];
+          var startInclusion = parts[1] == '1';
+          var endInclusion = parts[2] == '1';
           var maxItems = parseInt(parts[3]);
           var startKey = parts[4];
           var endKey = parts[5];
 
-          var startPredicate =
-            (startInclusion == '1') ?
-            (function(k) { return k >= startKey }) :
-            (function(k) { return k > startKey });
-          var endPredicate =
-            (endInclusion == '1') ?
-            (function(k) { return k <= endKey }) :
-            (function(k) { return k < endKey });
-
           var i = 0;
-          for (var k in items) {
-            if (0 != maxItems &&
-                i >= maxItems) {
-              break;
-            }
-
-            if (startPredicate(k) && (!endKey || endPredicate(k))) {
-              var item = items[k];
-              if (item != null &&
-                  item.val != null) {
-                emit('VALUE ' +
-                     item.key + ' ' +
-                     item.flg + ' ' +
-                     item.val.length + '\r\n' +
-                     item.val + '\r\n');
-                i++;
-              }
-            }
-          }
+          items.range(startKey, startInclusion,
+                      endKey, endInclusion,
+                      function(key) {
+                        var item = items.lookup(key);
+                        if (item != null &&
+                            item.val != null) {
+                          emit('VALUE ' +
+                               item.key + ' ' +
+                               item.flg + ' ' +
+                               item.val.length + '\r\n' +
+                               item.val + '\r\n');
+                          i++;
+                        }
+                        return (0 == maxItems || i < maxItems);
+                      });
           emit('END\r\n');
         } else if (cmd == 'stats') {
             emit('STAT num_conns ' + stats.num_conns + '\r\n');
@@ -255,7 +281,7 @@ var server = net.createServer(function(stream) {
             emit('STAT curr_items ' + nitems + '\r\n');
             emit('END\r\n');
         } else if (cmd == 'flush_all') {
-          items = {};
+          items.reset();
           nitems = 0;
           emit('OK\r\n');
         } else if (cmd == 'quit') {
