@@ -112,7 +112,14 @@ var server = net.createServer(function(stream) {
           emit('END\r\n');
         } else if (cmd == 'set' ||
                    cmd == 'add' ||
-                   cmd == 'replace') {
+                   cmd == 'replace' ||
+                   cmd == 'append' ||
+                   cmd == 'prepend') {
+          if (parts.length != 5) {
+            emit('CLIENT_ERROR\r\n');
+            continue;
+          }
+
           var item = { key: parts[1],
                        flg: parts[2],
                        exp: parseInt(parts[3]) };
@@ -153,6 +160,20 @@ var server = net.createServer(function(stream) {
                 } else {
                   resp = 'NOT_STORED\r\n';
                 }
+              } else if (cmd == 'append') {
+                if (prev != null) {
+                  item.val = prev.val + item.val;
+                  items[item.key] = item;
+                } else {
+                  resp = 'NOT_STORED\r\n';
+                }
+              } else if (cmd == 'prepend') {
+                if (prev != null) {
+                  item.val = item.val + prev.val;
+                  items[item.key] = item;
+                } else {
+                  resp = 'NOT_STORED\r\n';
+                }
               } else {
                 resp = 'SERVER_ERROR\r\n';
               }
@@ -169,6 +190,11 @@ var server = net.createServer(function(stream) {
             }
           }
         } else if (cmd == 'delete') {
+          if (parts.length != 2) {
+            emit('CLIENT_ERROR\r\n');
+            continue;
+          }
+
           var key = parts[1];
 
           if (items[key] != null) {
@@ -178,6 +204,51 @@ var server = net.createServer(function(stream) {
           } else {
             emit('NOT_FOUND\r\n');
           }
+        } else if (cmd == 'rget') {
+          // rget <startInclusion> <endInclusion> <maxItems> <startKey> [endKey]\r\n
+          //
+          if (parts.length < 5 ||
+              parts.length > 6) {
+            emit('CLIENT_ERROR\r\n');
+            continue;
+          }
+
+          var startInclusion = parts[1];
+          var endInclusion = parts[2];
+          var maxItems = parseInt(parts[3]);
+          var startKey = parts[4];
+          var endKey = parts[5];
+
+          var startPredicate =
+            (startInclusion == '1') ?
+            (function(k) { return k >= startKey }) :
+            (function(k) { return k > startKey });
+          var endPredicate =
+            (endInclusion == '1') ?
+            (function(k) { return k <= endKey }) :
+            (function(k) { return k < endKey });
+
+          var i = 0;
+          for (var k in items) {
+            if (0 != maxItems &&
+                i >= maxItems) {
+              break;
+            }
+
+            if (startPredicate(k) && (!endKey || endPredicate(k))) {
+              var item = items[k];
+              if (item != null &&
+                  item.val != null) {
+                emit('VALUE ' +
+                     item.key + ' ' +
+                     item.flg + ' ' +
+                     item.val.length + '\r\n' +
+                     item.val + '\r\n');
+                i++;
+              }
+            }
+          }
+          emit('END\r\n');
         } else if (cmd == 'stats') {
             emit('STAT num_conns ' + stats.num_conns + '\r\n');
             emit('STAT tot_conns ' + stats.tot_conns + '\r\n');
