@@ -225,8 +225,10 @@ var protocol_ascii_value = {
 
 // ----------------------------------------------------
 
-function mkServer(ctx) {
-  var server = net.createServer(function(stream) {
+function mkServer(ctx,
+                  protocol_simple,
+                  protocol_value) {
+  return net.createServer(function(stream) {
     stream.setEncoding('binary');
     stream.setNoDelay(true);
 
@@ -296,11 +298,11 @@ function mkServer(ctx) {
         var args = line.split(' ');
         var cmd = args[0];
 
-        var func_s = protocol_ascii_simple[cmd];
+        var func_s = protocol_simple[cmd];
         if (func_s != null) {
           func_s(ctx, emit, args);
         } else {
-          var func_v = protocol_ascii_value[cmd];
+          var func_v = protocol_value[cmd];
           if (func_v != null) {
             if (args.length != 5) {
               emit('CLIENT_ERROR\r\n');
@@ -356,8 +358,6 @@ function mkServer(ctx) {
       }
     }
   });
-
-  return server;
 }
 
 mkServer({ items: mkItems_ht(),
@@ -366,4 +366,6 @@ mkServer({ items: mkItems_ht(),
              num_conns: 0,
              tot_conns: 0
            }
-         }).listen(mc_port);
+         },
+         protocol_ascii_simple,
+         protocol_ascii_value).listen(mc_port);
