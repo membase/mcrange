@@ -27,39 +27,64 @@ function mkItems_ht() {
   var ht = {};
   var truth = function() { return true; };
 
-  return {
-      lookup: function(k) { return ht[k]; },
-      upsert: function(k, v) { ht[k] = v; },
-      remove: function(k) { delete ht[k]; },
-      reset: function() { ht = {}; },
+  var self = {
+      lookup: function(keys, cb) {
+        if (typeof(keys) == 'string') {
+          keys = [keys];
+        }
+
+        for (var i = 0; i < keys.length; i++) {
+          var key = keys[i];
+          if (cb(key, ht[key]) == false) {
+            break;
+          }
+        }
+
+        cb(null);
+      },
+      update: function(k, cb) {
+        ht[k] = cb(k, ht[k]);
+        cb(null);
+      },
+      remove: function(k, cb) {
+        var prev = ht[k];
+        delete ht[k];
+        cb(k, prev);
+        cb(null);
+      },
+      reset: function(cb) { ht = {}; cb(null); },
       range: function(startKey,
                       startInclusion,
                       endKey,
                       endInclusion,
-                      visitorFunc) {
-      var startPredicate =
-        startKey ?
-        (startInclusion ?
-         (function(k) { return k >= startKey }) :
-         (function(k) { return k > startKey })) :
-        truth;
+                      cb) {
+        var startPredicate =
+          startKey ?
+          (startInclusion ?
+           (function(k) { return k >= startKey }) :
+           (function(k) { return k > startKey })) :
+          truth;
 
-      var endPredicate =
-        endKey ?
-        (endInclusion ?
-         (function(k) { return k <= endKey }) :
-         (function(k) { return k < endKey })) :
-        truth;
+        var endPredicate =
+          endKey ?
+          (endInclusion ?
+           (function(k) { return k <= endKey }) :
+           (function(k) { return k < endKey })) :
+          truth;
 
-      for (var k in ht) {
-        if (startPredicate(k) && endPredicate(k)) {
-          if (visitorFunc(k) == false) {
-            break;
+        for (var k in ht) {
+          if (startPredicate(k) && endPredicate(k)) {
+            if (cb(k, ht[k]) == false) {
+              break;
+            }
           }
         }
+
+        cb(null);
       }
-    }
   };
+
+  return self;
 }
 
 // ----------------------------------------------------
@@ -139,18 +164,23 @@ var server = net.createServer(function(stream) {
         var parts = line.split(' ');
         var cmd = parts[0];
         if (cmd == 'get') {
-          for (var i = 1; i < parts.length; i++) {
-            var item = items.lookup(parts[i]);
-            if (item != null &&
-                item.val != null) {
-              emit('VALUE ' +
-                   item.key + ' ' +
-                   item.flg + ' ' +
-                   item.val.length + '\r\n' +
-                   item.val + '\r\n');
-            }
-          }
-          emit('END\r\n');
+          parts.shift();
+          items.lookup(parts,
+                       function(key, item) {
+                         if (key != null) {
+                           if (item != null &&
+                               item.key != null &&
+                               item.val != null) {
+                             emit('VALUE ' +
+                                  item.key + ' ' +
+                                  item.flg + ' ' +
+                                  item.val.length + '\r\n' +
+                                  item.val + '\r\n');
+                           }
+                         } else {
+                           emit('END\r\n');
+                         }
+                       });
         } else if (cmd == 'set' ||
                    cmd == 'add' ||
                    cmd == 'replace' ||
@@ -180,54 +210,67 @@ var server = net.createServer(function(stream) {
             } else {
               item.val = d.slice(0, nval);
 
-              var prev = items.lookup(item.key);
               var resp = 'STORED\r\n';
 
-              if (cmd == 'set') {
-                if (prev == null) {
-                  nitems++;
-                }
-                items.upsert(item.key, item);
-              } else if (cmd == 'add') {
-                if (prev == null) {
-                  nitems++;
-                  items.upsert(item.key, item);
-                } else {
-                  resp = 'NOT_STORED\r\n';
-                }
-              } else if (cmd == 'replace') {
-                if (prev != null) {
-                  items.upsert(item.key, item);
-                } else {
-                  resp = 'NOT_STORED\r\n';
-                }
-              } else if (cmd == 'append') {
-                if (prev != null) {
-                  item.val = prev.val + item.val;
-                  items.upsert(item.key, item);
-                } else {
-                  resp = 'NOT_STORED\r\n';
-                }
-              } else if (cmd == 'prepend') {
-                if (prev != null) {
-                  item.val = item.val + prev.val;
-                  items.upsert(item.key, item);
-                } else {
-                  resp = 'NOT_STORED\r\n';
-                }
-              } else {
-                resp = 'SERVER_ERROR\r\n';
-              }
+              items.update(
+                item.key,
+                function(rkey, ritem) {
+                  if (rkey != null) {
+                    if (cmd == 'set') {
+                      if (ritem == null) {
+                        nitems++;
+                      }
+                      return item;
+                    }
+                    if (cmd == 'add') {
+                      if (ritem != null) {
+                        resp = 'NOT_STORED\r\n';
+                        return ritem;
+                      } else {
+                        nitems++;
+                        return item;
+                      }
+                    }
+                    if (cmd == 'replace') {
+                      if (ritem != null) {
+                        return item;
+                      } else {
+                        resp = 'NOT_STORED\r\n';
+                        return ritem;
+                      }
+                    }
+                    if (cmd == 'append') {
+                      if (ritem != null) {
+                        item.val = ritem.val + item.val;
+                        return item;
+                      } else {
+                        resp = 'NOT_STORED\r\n';
+                        return null;
+                      }
+                    } else if (cmd == 'prepend') {
+                      if (ritem != null) {
+                        item.val = item.val + ritem.val;
+                        return item;
+                      } else {
+                        resp = 'NOT_STORED\r\n';
+                        return null;
+                      }
+                    } else {
+                      resp = 'SERVER_ERROR\r\n';
+                      return ritem;
+                    }
+                  } else {
+                    emit(resp);
 
-              emit(resp);
+                    if (handler == read_more) {
+                      handler = new_cmd;
 
-              if (handler == read_more) {
-                handler = new_cmd;
-
-                new_cmd(d.slice(nval + 2));
-              } else {
-                data = d.slice(nval + 2);
-              }
+                      new_cmd(d.slice(nval + 2));
+                    } else {
+                      data = d.slice(nval + 2);
+                    }
+                  }
+                });
             }
           }
         } else if (cmd == 'delete') {
@@ -238,15 +281,21 @@ var server = net.createServer(function(stream) {
 
           var key = parts[1];
 
-          if (items.lookup(key) != null) {
-            items.remove(key);
-            nitems--;
-            emit('DELETED\r\n');
-          } else {
-            emit('NOT_FOUND\r\n');
-          }
+          items.remove(
+            key,
+            function(rkey, ritem) {
+              if (rkey != null) {
+                if (ritem != null) {
+                  nitems--;
+                  emit('DELETED\r\n');
+                } else {
+                  emit('NOT_FOUND\r\n');
+                }
+              }
+            });
         } else if (cmd == 'rget') {
-          // rget <startInclusion> <endInclusion> <maxItems> <startKey> [endKey]\r\n
+          // rget <startInclusion> <endInclusion> <maxItems> \
+          //      <startKey> [endKey]\r\n
           //
           if (parts.length < 5 ||
               parts.length > 6) {
@@ -263,29 +312,32 @@ var server = net.createServer(function(stream) {
           var i = 0;
           items.range(startKey, startInclusion,
                       endKey, endInclusion,
-                      function(key) {
-                        var item = items.lookup(key);
-                        if (item != null &&
-                            item.val != null) {
-                          emit('VALUE ' +
-                               item.key + ' ' +
-                               item.flg + ' ' +
-                               item.val.length + '\r\n' +
-                               item.val + '\r\n');
-                          i++;
+                      function(key, item) {
+                        if (key != null) {
+                          if (item != null &&
+                              item.val != null) {
+                            emit('VALUE ' +
+                                 item.key + ' ' +
+                                 item.flg + ' ' +
+                                 item.val.length + '\r\n' +
+                                 item.val + '\r\n');
+                            i++;
+                          }
+                          return (0 == maxItems || i < maxItems);
+                        } else {
+                          emit('END\r\n');
                         }
-                        return (0 == maxItems || i < maxItems);
                       });
-          emit('END\r\n');
         } else if (cmd == 'stats') {
             emit('STAT num_conns ' + stats.num_conns + '\r\n');
             emit('STAT tot_conns ' + stats.tot_conns + '\r\n');
             emit('STAT curr_items ' + nitems + '\r\n');
             emit('END\r\n');
         } else if (cmd == 'flush_all') {
-          items.reset();
-          nitems = 0;
-          emit('OK\r\n');
+          items.reset(function() {
+                        nitems = 0;
+                        emit('OK\r\n');
+                      });
         } else if (cmd == 'quit') {
           stream.end();
         } else {
