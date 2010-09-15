@@ -88,61 +88,61 @@ function mkItems_ht() {
 
 // ----------------------------------------------------
 
-var protocol_ascii_simple = {
-  'get': function(ctx, emit, args) {
+var cmds_ascii_simple = {
+  'get': function(ctx, items, emit, args) {
     args.shift();
-    ctx.items.lookup(args,
-                     function(key, item) {
-                       if (key != null) {
-                         if (item != null &&
-                             item.key != null &&
-                             item.val != null) {
-                           emit('VALUE ' +
-                                item.key + ' ' +
-                                item.flg + ' ' +
-                                item.val.length + '\r\n' +
-                                item.val + '\r\n');
-                         }
-                       } else {
-                         emit('END\r\n');
-                       }
-                     });
+    items.lookup(args,
+                 function(key, item) {
+                   if (key != null) {
+                     if (item != null &&
+                         item.key != null &&
+                         item.val != null) {
+                       emit('VALUE ' +
+                            item.key + ' ' +
+                            item.flg + ' ' +
+                            item.val.length + '\r\n' +
+                            item.val + '\r\n');
+                     }
+                   } else {
+                     emit('END\r\n');
+                   }
+                 });
   },
-  'delete': function(ctx, emit, args) {
+  'delete': function(ctx, items, emit, args) {
     if (args.length != 2) {
       emit('CLIENT_ERROR\r\n');
     } else {
       var key = args[1];
 
-      ctx.items.remove(key,
-                       function(rkey, ritem) {
-                         if (rkey != null) {
-                           if (ritem != null) {
-                             ctx.nitems--;
-                             emit('DELETED\r\n');
-                           } else {
-                             emit('NOT_FOUND\r\n');
-                           }
-                         }
-                       });
+      items.remove(key,
+                   function(rkey, ritem) {
+                     if (rkey != null) {
+                       if (ritem != null) {
+                         ctx.nitems--;
+                         emit('DELETED\r\n');
+                       } else {
+                         emit('NOT_FOUND\r\n');
+                       }
+                     }
+                   });
     }
   },
-  'stats': function(ctx, emit, args) {
+  'stats': function(ctx, items, emit, args) {
     emit('STAT num_conns ' + ctx.stats.num_conns + '\r\n');
     emit('STAT tot_conns ' + ctx.stats.tot_conns + '\r\n');
     emit('STAT curr_items ' + ctx.nitems + '\r\n');
     emit('END\r\n');
   },
-  'flush_all': function(ctx, emit, args) {
-    ctx.items.reset(function() {
-                      ctx.nitems = 0;
-                      emit('OK\r\n');
-                    });
+  'flush_all': function(ctx, items, emit, args) {
+    items.reset(function() {
+                  ctx.nitems = 0;
+                  emit('OK\r\n');
+                });
   },
-  'quit': function(ctx, emit, args) {
+  'quit': function(ctx, items, emit, args) {
     emit(null);
   },
-  'rget': function(ctx, emit, args) {
+  'rget': function(ctx, items, emit, args) {
     // rget <startInclusion> <endInclusion> <maxItems>  \
     //      <startKey> [endKey]\r\n
     //
@@ -157,38 +157,38 @@ var protocol_ascii_simple = {
       var endKey = args[5];
 
       var i = 0;
-      ctx.items.range(startKey, startInclusion,
-                      endKey, endInclusion,
-                      function(key, item) {
-                        if (key != null) {
-                          if (item != null &&
-                              item.val != null) {
-                            emit('VALUE ' +
-                                 item.key + ' ' +
-                                 item.flg + ' ' +
-                                 item.val.length + '\r\n' +
-                                 item.val + '\r\n');
-                            i++;
-                          }
-                          return (0 == maxItems || i < maxItems);
-                        } else {
-                          emit('END\r\n');
-                        }
-                      });
+      items.range(startKey, startInclusion,
+                  endKey, endInclusion,
+                  function(key, item) {
+                    if (key != null) {
+                      if (item != null &&
+                          item.val != null) {
+                        emit('VALUE ' +
+                             item.key + ' ' +
+                             item.flg + ' ' +
+                             item.val.length + '\r\n' +
+                             item.val + '\r\n');
+                        i++;
+                      }
+                      return (0 == maxItems || i < maxItems);
+                    } else {
+                      emit('END\r\n');
+                    }
+                  });
     }
   }
 };
 
 // ----------------------------------------------------
 
-var protocol_ascii_value = {
-  set: function(ctx, item, prev) {
+var cmds_ascii_value = {
+  set: function(ctx, items, item, prev) {
     if (prev == null) {
       ctx.nitems++;
     }
     return [item, 'STORED\r\n'];
   },
-  add: function(ctx, item, prev) {
+  add: function(ctx, items, item, prev) {
     if (prev != null) {
       return [prev, 'NOT_STORED\r\n'];
     } else {
@@ -196,14 +196,14 @@ var protocol_ascii_value = {
       return [item, 'STORED\r\n'];
     }
   },
-  replace: function(ctx, item, prev) {
+  replace: function(ctx, items, item, prev) {
     if (prev != null) {
       return [item, 'STORED\r\n'];
     } else {
       return [prev, 'NOT_STORED\r\n'];
     }
   },
-  append: function(ctx, item, prev) {
+  append: function(ctx, items, item, prev) {
     if (prev != null) {
       item.val = prev.val + item.val;
       return [item, 'STORED\r\n'];
@@ -211,7 +211,7 @@ var protocol_ascii_value = {
       return [null, 'NOT_STORED\r\n'];
     }
   },
-  prepend: function(ctx, item, prev) {
+  prepend: function(ctx, items, item, prev) {
     if (prev != null) {
       item.val = item.val + prev.val;
       return [item, 'STORED\r\n'];
@@ -223,9 +223,10 @@ var protocol_ascii_value = {
 
 // ----------------------------------------------------
 
-function mkServer(ctx,
-                  protocol_simple,
-                  protocol_value) {
+function mkServer_ascii(ctx,
+                        items,
+                        cmds_simple,
+                        cmds_value) {
   return net.createServer(function(stream) {
     stream.setEncoding('binary');
     stream.setNoDelay(true);
@@ -296,11 +297,11 @@ function mkServer(ctx,
         var args = line.split(' ');
         var cmd = args[0];
 
-        var func_s = protocol_simple[cmd];
+        var func_s = cmds_simple[cmd];
         if (func_s != null) {
-          func_s(ctx, emit, args);
+          func_s(ctx, items, emit, args);
         } else {
-          var func_v = protocol_value[cmd];
+          var func_v = cmds_value[cmd];
           if (func_v != null) {
             if (args.length != 5) {
               emit('CLIENT_ERROR\r\n');
@@ -328,11 +329,11 @@ function mkServer(ctx,
 
                 var resp = 'STORED\r\n';
 
-                ctx.items.update(
+                items.update(
                   item.key,
                   function(rkey, ritem) {
                     if (rkey != null) {
-                      var res = func_v(ctx, item, ritem);
+                      var res = func_v(ctx, items, item, ritem);
                       resp = res[1];
                       return res[0];
                     } else {
@@ -362,12 +363,11 @@ function mkServer(ctx,
 
 var mc_port = 11299;
 
-mkServer({ items: mkItems_ht(),
-           nitems: 0,
-           stats: {
-             num_conns: 0,
-             tot_conns: 0
-           }
-         },
-         protocol_ascii_simple,
-         protocol_ascii_value).listen(mc_port);
+mkServer_ascii({ nitems: 0,
+                 stats: { num_conns: 0,
+                          tot_conns: 0
+                 }
+               },
+               mkItems_ht(),
+               cmds_ascii_simple,
+               cmds_ascii_value).listen(mc_port);
