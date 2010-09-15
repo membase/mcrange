@@ -10,21 +10,17 @@
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.  See the License for the specific language governing
+ * permissions and limitations under the License.
  */
 var sys = require('sys'),
     net = require('net');
 
 // ----------------------------------------------------
 
-var mc_port = 11299;
-
-// ----------------------------------------------------
-
 // An asynchronous (callback-oriented) items
-// hashtable implementation.
+// implementation using hashtable, with range support.
 //
 function mkItems_ht() {
   var ht = {};
@@ -182,6 +178,8 @@ var protocol_ascii_simple = {
     }
   }
 };
+
+// ----------------------------------------------------
 
 var protocol_ascii_value = {
   set: function(ctx, item, prev) {
@@ -359,6 +357,10 @@ function mkServer(ctx,
     }
   });
 }
+
+// ----------------------------------------------------
+
+var mc_port = 11299;
 
 mkServer({ items: mkItems_ht(),
            nitems: 0,
