@@ -23,6 +23,9 @@ var mc_port = 11299;
 
 // ----------------------------------------------------
 
+// An asynchronous (callback-oriented) items
+// hashtable implementation.
+//
 function mkItems_ht() {
   var ht = {};
   var truth = function() { return true; };
@@ -89,37 +92,166 @@ function mkItems_ht() {
 
 // ----------------------------------------------------
 
-var items = mkItems_ht();
-var nitems = 0;
+var protocol_ascii_simple = {
+  'get': function(ctx, emit, args) {
+    args.shift();
+    ctx.items.lookup(args,
+                     function(key, item) {
+                       if (key != null) {
+                         if (item != null &&
+                             item.key != null &&
+                             item.val != null) {
+                           emit('VALUE ' +
+                                item.key + ' ' +
+                                item.flg + ' ' +
+                                item.val.length + '\r\n' +
+                                item.val + '\r\n');
+                         }
+                       } else {
+                         emit('END\r\n');
+                       }
+                     });
+  },
+  'delete': function(ctx, emit, args) {
+    if (args.length != 2) {
+      emit('CLIENT_ERROR\r\n');
+    } else {
+      var key = args[1];
 
-var stats = {
-  num_conns: 0,
-  tot_conns: 0
+      ctx.items.remove(key,
+                       function(rkey, ritem) {
+                         if (rkey != null) {
+                           if (ritem != null) {
+                             ctx.nitems--;
+                             emit('DELETED\r\n');
+                           } else {
+                             emit('NOT_FOUND\r\n');
+                           }
+                         }
+                       });
+    }
+  },
+  'stats': function(ctx, emit, args) {
+    emit('STAT num_conns ' + ctx.stats.num_conns + '\r\n');
+    emit('STAT tot_conns ' + ctx.stats.tot_conns + '\r\n');
+    emit('STAT curr_items ' + ctx.nitems + '\r\n');
+    emit('END\r\n');
+  },
+  'flush_all': function(ctx, emit, args) {
+    ctx.items.reset(function() {
+                      ctx.nitems = 0;
+                      emit('OK\r\n');
+                    });
+  },
+  'quit': function(ctx, emit, args) {
+    emit(null);
+  },
+  'rget': function(ctx, emit, args) {
+    // rget <startInclusion> <endInclusion> <maxItems>  \
+    //      <startKey> [endKey]\r\n
+    //
+    if (args.length < 5 ||
+        args.length > 6) {
+      emit('CLIENT_ERROR\r\n');
+    } else {
+      var startInclusion = args[1] == '1';
+      var endInclusion = args[2] == '1';
+      var maxItems = parseInt(args[3]);
+      var startKey = args[4];
+      var endKey = args[5];
+
+      var i = 0;
+      ctx.items.range(startKey, startInclusion,
+                      endKey, endInclusion,
+                      function(key, item) {
+                        if (key != null) {
+                          if (item != null &&
+                              item.val != null) {
+                            emit('VALUE ' +
+                                 item.key + ' ' +
+                                 item.flg + ' ' +
+                                 item.val.length + '\r\n' +
+                                 item.val + '\r\n');
+                            i++;
+                          }
+                          return (0 == maxItems || i < maxItems);
+                        } else {
+                          emit('END\r\n');
+                        }
+                      });
+    }
+  }
+};
+
+var protocol_ascii_value = {
+  set: function(ctx, item, prev) {
+    if (prev == null) {
+      ctx.nitems++;
+    }
+    return [item, 'STORED\r\n'];
+  },
+  add: function(ctx, item, prev) {
+    if (prev != null) {
+      return [prev, 'NOT_STORED\r\n'];
+    } else {
+      ctx.nitems++;
+      return [item, 'STORED\r\n'];
+    }
+  },
+  replace: function(ctx, item, prev) {
+    if (prev != null) {
+      return [item, 'STORED\r\n'];
+    } else {
+      return [prev, 'NOT_STORED\r\n'];
+    }
+  },
+  append: function(ctx, item, prev) {
+    if (prev != null) {
+      item.val = prev.val + item.val;
+      return [item, 'STORED\r\n'];
+    } else {
+      return [null, 'NOT_STORED\r\n'];
+    }
+  },
+  prepend: function(ctx, item, prev) {
+    if (prev != null) {
+      item.val = item.val + prev.val;
+      return [item, 'STORED\r\n'];
+    } else {
+      return [null, 'NOT_STORED\r\n'];
+    }
+  }
 };
 
 // ----------------------------------------------------
 
-var server = net.createServer(function(stream) {
+function mkServer(ctx) {
+  var server = net.createServer(function(stream) {
     stream.setEncoding('binary');
     stream.setNoDelay(true);
 
     stream.on('connect', function() {
-        stats.num_conns++;
-        stats.tot_conns++;
+        ctx.stats.num_conns++;
+        ctx.stats.tot_conns++;
       });
     stream.on('end', function() {
         stream.end();
-        stats.num_conns--;
+        ctx.stats.num_conns--;
       });
 
-    var leftOver = null;    // Any remaining bytes when we haven't
-                            // read a full request yet.
-    var handler  = new_cmd; // Either new_cmd (at the start of a new
-                            // request), or read_more (when more
-                            // mutation value data is still being read).
-    var emitQueue = null;   // Used when stream write is full.
+    var leftOver = null;   // Any remaining bytes when we haven't
+                           // read a full request yet.
+    var handler = new_cmd; // Either new_cmd (at the start of a new
+                           // request), or read_more (when more
+                           // mutation value data is still being read).
+    var emitQueue = null;  // Used when stream write is full.
 
     function emit(data) {
+      if (data == null) {
+        stream.end();
+        return;
+      }
+
       if (emitQueue != null) {
         emitQueue[emitQueue.length] = data;
       } else {
@@ -161,190 +293,77 @@ var server = net.createServer(function(stream) {
         var line = data.slice(0, crnl);
         data = data.slice(crnl + 2);
 
-        var parts = line.split(' ');
-        var cmd = parts[0];
-        if (cmd == 'get') {
-          parts.shift();
-          items.lookup(parts,
-                       function(key, item) {
-                         if (key != null) {
-                           if (item != null &&
-                               item.key != null &&
-                               item.val != null) {
-                             emit('VALUE ' +
-                                  item.key + ' ' +
-                                  item.flg + ' ' +
-                                  item.val.length + '\r\n' +
-                                  item.val + '\r\n');
-                           }
-                         } else {
-                           emit('END\r\n');
-                         }
-                       });
-        } else if (cmd == 'set' ||
-                   cmd == 'add' ||
-                   cmd == 'replace' ||
-                   cmd == 'append' ||
-                   cmd == 'prepend') {
-          if (parts.length != 5) {
-            emit('CLIENT_ERROR\r\n');
-            continue;
-          }
+        var args = line.split(' ');
+        var cmd = args[0];
 
-          var item = { key: parts[1],
-                       flg: parts[2],
-                       exp: parseInt(parts[3]) };
-          var nval = parseInt(parts[4]);
-
-          read_more(data);
-
-          function read_more(d) {
-            if (d.length < nval + 2) { // "\r\n".length == 2.
-              leftOver = d;
-
-              handler = read_more;
-
-              // Break out of new_cmd while loop.
-              //
-              data = null;
-            } else {
-              item.val = d.slice(0, nval);
-
-              var resp = 'STORED\r\n';
-
-              items.update(
-                item.key,
-                function(rkey, ritem) {
-                  if (rkey != null) {
-                    if (cmd == 'set') {
-                      if (ritem == null) {
-                        nitems++;
-                      }
-                      return item;
-                    }
-                    if (cmd == 'add') {
-                      if (ritem != null) {
-                        resp = 'NOT_STORED\r\n';
-                        return ritem;
-                      } else {
-                        nitems++;
-                        return item;
-                      }
-                    }
-                    if (cmd == 'replace') {
-                      if (ritem != null) {
-                        return item;
-                      } else {
-                        resp = 'NOT_STORED\r\n';
-                        return ritem;
-                      }
-                    }
-                    if (cmd == 'append') {
-                      if (ritem != null) {
-                        item.val = ritem.val + item.val;
-                        return item;
-                      } else {
-                        resp = 'NOT_STORED\r\n';
-                        return null;
-                      }
-                    } else if (cmd == 'prepend') {
-                      if (ritem != null) {
-                        item.val = item.val + ritem.val;
-                        return item;
-                      } else {
-                        resp = 'NOT_STORED\r\n';
-                        return null;
-                      }
-                    } else {
-                      resp = 'SERVER_ERROR\r\n';
-                      return ritem;
-                    }
-                  } else {
-                    emit(resp);
-
-                    if (handler == read_more) {
-                      handler = new_cmd;
-
-                      new_cmd(d.slice(nval + 2));
-                    } else {
-                      data = d.slice(nval + 2);
-                    }
-                  }
-                });
-            }
-          }
-        } else if (cmd == 'delete') {
-          if (parts.length != 2) {
-            emit('CLIENT_ERROR\r\n');
-            continue;
-          }
-
-          var key = parts[1];
-
-          items.remove(
-            key,
-            function(rkey, ritem) {
-              if (rkey != null) {
-                if (ritem != null) {
-                  nitems--;
-                  emit('DELETED\r\n');
-                } else {
-                  emit('NOT_FOUND\r\n');
-                }
-              }
-            });
-        } else if (cmd == 'rget') {
-          // rget <startInclusion> <endInclusion> <maxItems> \
-          //      <startKey> [endKey]\r\n
-          //
-          if (parts.length < 5 ||
-              parts.length > 6) {
-            emit('CLIENT_ERROR\r\n');
-            continue;
-          }
-
-          var startInclusion = parts[1] == '1';
-          var endInclusion = parts[2] == '1';
-          var maxItems = parseInt(parts[3]);
-          var startKey = parts[4];
-          var endKey = parts[5];
-
-          var i = 0;
-          items.range(startKey, startInclusion,
-                      endKey, endInclusion,
-                      function(key, item) {
-                        if (key != null) {
-                          if (item != null &&
-                              item.val != null) {
-                            emit('VALUE ' +
-                                 item.key + ' ' +
-                                 item.flg + ' ' +
-                                 item.val.length + '\r\n' +
-                                 item.val + '\r\n');
-                            i++;
-                          }
-                          return (0 == maxItems || i < maxItems);
-                        } else {
-                          emit('END\r\n');
-                        }
-                      });
-        } else if (cmd == 'stats') {
-            emit('STAT num_conns ' + stats.num_conns + '\r\n');
-            emit('STAT tot_conns ' + stats.tot_conns + '\r\n');
-            emit('STAT curr_items ' + nitems + '\r\n');
-            emit('END\r\n');
-        } else if (cmd == 'flush_all') {
-          items.reset(function() {
-                        nitems = 0;
-                        emit('OK\r\n');
-                      });
-        } else if (cmd == 'quit') {
-          stream.end();
+        var func_s = protocol_ascii_simple[cmd];
+        if (func_s != null) {
+          func_s(ctx, emit, args);
         } else {
-          emit('CLIENT_ERROR\r\n');
+          var func_v = protocol_ascii_value[cmd];
+          if (func_v != null) {
+            if (args.length != 5) {
+              emit('CLIENT_ERROR\r\n');
+              continue;
+            }
+
+            var item = { key: args[1],
+                         flg: args[2],
+                         exp: parseInt(args[3]) };
+            var nval = parseInt(args[4]);
+
+            read_more(data);
+
+            function read_more(d) {
+              if (d.length < nval + 2) { // "\r\n".length == 2.
+                leftOver = d;
+
+                handler = read_more;
+
+                // Break out of new_cmd while loop.
+                //
+                data = null;
+              } else {
+                item.val = d.slice(0, nval);
+
+                var resp = 'STORED\r\n';
+
+                ctx.items.update(
+                  item.key,
+                  function(rkey, ritem) {
+                    if (rkey != null) {
+                      var res = func_v(ctx, item, ritem);
+                      resp = res[1];
+                      return res[0];
+                    } else {
+                      emit(resp);
+
+                      if (handler == read_more) {
+                        handler = new_cmd;
+
+                        new_cmd(d.slice(nval + 2));
+                      } else {
+                        data = d.slice(nval + 2);
+                      }
+                    }
+                  });
+              }
+            }
+          } else {
+            emit('CLIENT_ERROR\r\n');
+          }
         }
       }
     }
   });
 
-server.listen(mc_port);
+  return server;
+}
+
+mkServer({ items: mkItems_ht(),
+           nitems: 0,
+           stats: {
+             num_conns: 0,
+             tot_conns: 0
+           }
+         }).listen(mc_port);
