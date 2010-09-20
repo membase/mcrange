@@ -1,0 +1,36 @@
+flush_all
+>OK
+set a 0 0 1
+1
+>STORED
+add a 0 0 1
+1
+>NOT_STORED
+add b 0 0 1
+1
+>STORED
+replace c 0 0 1
+1
+>NOT_STORED
+replace b 0 0 1
+2
+>STORED
+get a
+>VALUE a 0 1
+>1
+>END
+get a b
+>VALUE a 0 1
+>1
+>VALUE b 0 1
+>2
+>END
+get c
+>END
+delete b
+>DELETED
+get a b c
+>VALUE a 0 1
+>1
+>END
+quit
