@@ -75,7 +75,7 @@ function mkCmdsSimple() {
       emit(null);
     },
     'rget': function(ctx, items, emit, args) {
-      // rget <startInclusion> <endInclusion> <maxItems>    \
+      // rget <startInclusion> <endInclusion> <maxItems> \
       //      <startKey> [endKey]\r\n
       //
       if (args.length < 5 ||
